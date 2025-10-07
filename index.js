@@ -1,10 +1,6 @@
-// index.js
-
-const express = require('express');
-const Stripe = require('stripe');
-const Facturapi = require('facturapi');
-const bodyParser = require('body-parser');
-require('dotenv').config();
+import express from 'express';
+import Stripe from 'stripe';
+import Facturapi from 'facturapi';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -14,15 +10,26 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 const facturapi = new Facturapi(process.env.FACTURAPI_KEY);
 
-app.use(bodyParser.raw({ type: 'application/json' }));
+// Permitir acceso al body sin parsear para validar firma de Stripe
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
+// Ruta GET para que UptimeRobot pueda validar que el endpoint existe
+app.get('/webhook', (req, res) => {
+  res.status(200).send('✅ Webhook endpoint is alive');
+});
+
+// Ruta POST que usa Stripe para enviar eventos
 app.post('/webhook', async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.body,
+      req.rawBody,
       sig,
       process.env.STRIPE_ENDPOINT_SECRET
     );
@@ -33,11 +40,10 @@ app.post('/webhook', async (req, res) => {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-
     const customerEmail = session.customer_details.email;
     const customerName = session.customer_details.name;
-
     const metadata = session.metadata || {};
+
     const tax_id = metadata.tax_id || 'XAXX010101000';
     const description = metadata.description || 'Donativo';
 
@@ -47,9 +53,7 @@ app.post('/webhook', async (req, res) => {
         email: customerEmail,
         tax_id,
         tax_system: '612',
-        address: {
-          zip: '99999',
-        },
+        address: { zip: '99999' },
       });
 
       const invoice = await facturapi.invoices.create({
@@ -78,5 +82,5 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Servidor escuchando en http://localhost:${port}`);
+  console.log(`✅ Servidor escuchando en http://localhost:${port}`);
 });
