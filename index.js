@@ -1,6 +1,10 @@
-import express from 'express';
-import Stripe from 'stripe';
-import Facturapi from 'facturapi';
+// index.js
+
+const express = require('express');
+const Stripe = require('stripe');
+const Facturapi = require('facturapi');
+const bodyParser = require('body-parser');
+require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -10,11 +14,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 const facturapi = new Facturapi(process.env.FACTURAPI_KEY);
 
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+app.use(bodyParser.raw({ type: 'application/json' }));
 
 app.post('/webhook', async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -22,7 +22,7 @@ app.post('/webhook', async (req, res) => {
 
   try {
     event = stripe.webhooks.constructEvent(
-      req.rawBody,
+      req.body,
       sig,
       process.env.STRIPE_ENDPOINT_SECRET
     );
