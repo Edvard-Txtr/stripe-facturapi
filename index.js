@@ -1,49 +1,82 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const axios = require('axios');
-require('dotenv').config();
+import express from 'express';
+import Stripe from 'stripe';
+import Facturapi from 'facturapi';
 
 const app = express();
-app.use(bodyParser.json());
+const port = process.env.PORT || 3000;
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2023-08-16',
+});
+const facturapi = new Facturapi(process.env.FACTURAPI_KEY);
+
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 app.post('/webhook', async (req, res) => {
-  const event = req.body;
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.rawBody,
+      sig,
+      process.env.STRIPE_ENDPOINT_SECRET
+    );
+  } catch (err) {
+    console.error('❌ Error verificando webhook:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
 
+    const customerEmail = session.customer_details.email;
+    const customerName = session.customer_details.name;
+
+    const metadata = session.metadata || {};
+    const tax_id = metadata.tax_id || 'XAXX010101000';
+    const description = metadata.description || 'Donativo';
+
     try {
-      const invoice = await axios.post('https://www.facturapi.io/v2/invoices', {
-        customer: {
-          legal_name: session.customer_details.name,
-          email: session.customer_details.email,
-          tax_id: session.metadata.tax_id
+      const customer = await facturapi.customers.create({
+        legal_name: customerName,
+        email: customerEmail,
+        tax_id,
+        tax_system: '612',
+        address: {
+          zip: '99999',
         },
-        items: [{
-          quantity: 1,
-          product: {
-            description: session.metadata.description,
-            product_key: "84111506",
-            price: parseFloat(session.amount_total) / 100,
-            tax_included: true
-          }
-        }],
-        payment_form: "03",
-        use: "G03"
-      }, {
-        headers: {
-          Authorization: `Bearer ${process.env.FACTURAPI_KEY}`
-        }
       });
 
-      console.log('Factura creada:', invoice.data.id);
+      const invoice = await facturapi.invoices.create({
+        customer: customer.id,
+        items: [
+          {
+            quantity: 1,
+            product: {
+              description,
+              product_key: '84101600',
+              price: session.amount_total / 100,
+            },
+          },
+        ],
+        payment_form: '03',
+        use: 'D01',
+      });
+
+      console.log('✅ Factura creada:', invoice.id);
     } catch (err) {
-      console.error('Error creando factura:', err.response?.data || err.message);
+      console.error('❌ Error creando factura:', err.message);
     }
   }
 
-  res.status(200).send('Received');
+  res.sendStatus(200);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+app.listen(port, () => {
+  console.log(`Servidor escuchando en http://localhost:${port}`);
+});
